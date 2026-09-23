@@ -45,7 +45,6 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
-    credentials: 'include',
   })
 
   if (!response.ok) {

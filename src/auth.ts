@@ -22,39 +22,17 @@ export function setCurrentUser(user: User | null): void {
 }
 
 export async function login(email: string, password: string): Promise<User> {
-  try {
-    const response = await loginUser({ email, password })
-    setApiToken(response.token)
-    setCurrentUser(response.user)
-    return response.user
-  } catch {
-    const fallbackUser: User = {
-      id: `local-${Date.now()}`,
-      name: email.split('@')[0] || 'Usuário',
-      email,
-    }
-    setApiToken('local-demo-token')
-    setCurrentUser(fallbackUser)
-    return fallbackUser
-  }
+  const response = await loginUser({ email, password })
+  setApiToken(response.token)
+  setCurrentUser(response.user)
+  return response.user
 }
 
 export async function register(name: string, email: string, password: string): Promise<User> {
-  try {
-    const response = await registerUser({ name, email, password })
-    setApiToken(response.token)
-    setCurrentUser(response.user)
-    return response.user
-  } catch {
-    const fallbackUser: User = {
-      id: `local-${Date.now()}`,
-      name: name.trim() || 'Usuário',
-      email,
-    }
-    setApiToken('local-demo-token')
-    setCurrentUser(fallbackUser)
-    return fallbackUser
-  }
+  const response = await registerUser({ name, email, password })
+  setApiToken(response.token)
+  setCurrentUser(response.user)
+  return response.user
 }
 
 export async function logout(): Promise<void> {
