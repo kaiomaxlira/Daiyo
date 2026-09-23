@@ -2,8 +2,17 @@ export type SessionStatus = 'CREATED' | 'RUNNING' | 'PAUSED' | 'BREAK' | 'COMPLE
 export type TimerMethod = 'CUSTOM' | 'POMODORO' | 'DEEP_WORK' | 'TWO_HOURS' | 'SHORT'
 export type TimerPhase = 'STUDY' | 'SHORT_BREAK' | 'LONG_BREAK'
 
+export interface User {
+  id: number | string
+  name: string
+  email: string
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface StudySession {
   id: string
+  userId?: number | string | null
   topic: string
   method: TimerMethod
   methodLabel: string

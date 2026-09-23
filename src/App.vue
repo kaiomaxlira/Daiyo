@@ -1,9 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { AppSettings, SessionStatus, StudySession, TimerMethod, TimerPhase } from './types'
+import DashboardPage from './pages/DashboardPage.vue'
+import HistoryPage from './pages/HistoryPage.vue'
+import NewSessionPage from './pages/NewSessionPage.vue'
+import SettingsPage from './pages/SettingsPage.vue'
+import TimerPage from './pages/TimerPage.vue'
+import AuthPage from './pages/AuthPage.vue'
+import type { AppSettings, SessionStatus, StudySession, TimerMethod, TimerPhase, User } from './types'
 import { getSessions, getSettings, saveSession, saveSettings } from './storage'
+import { getCurrentUser, isAuthenticated, login, logout, register } from './auth'
 
-const page = ref<'dashboard' | 'new' | 'timer' | 'history' | 'settings'>('dashboard')
+type AppPage = 'auth' | 'dashboard' | 'new' | 'timer' | 'history' | 'settings'
+
+const page = ref<AppPage>('auth')
+const authMode = ref<'login' | 'register'>('login')
+const authName = ref('')
+const authEmail = ref('')
+const authPassword = ref('')
+const authError = ref('')
+const authLoading = ref(false)
+const currentUser = ref<User | null>(getCurrentUser())
 const sessions = ref<StudySession[]>([])
 const settings = ref<AppSettings>(getSettings())
 const activeSession = ref<StudySession | null>(null)
@@ -86,15 +102,51 @@ async function load(): Promise<void> {
   activeSession.value = sessions.value.find((session) => ['RUNNING', 'PAUSED', 'BREAK'].includes(session.status)) ?? null
   if (activeSession.value) {
     if (remainingSeconds(activeSession.value, Date.now()) <= 0 && activeSession.value.status === 'RUNNING') await finishSession(false)
-    else page.value = 'timer'
+    else setPage('timer')
   }
 }
+async function submitAuth(): Promise<void> {
+  authLoading.value = true
+  authError.value = ''
+
+  try {
+    const user = authMode.value === 'login'
+      ? await login(authEmail.value.trim(), authPassword.value)
+      : await register(authName.value.trim(), authEmail.value.trim(), authPassword.value)
+
+    currentUser.value = user
+    page.value = 'dashboard'
+    notice.value = 'Login realizado com sucesso.'
+  } catch (errorValue) {
+    authError.value = errorValue instanceof Error ? errorValue.message : 'Não foi possível realizar a autenticação.'
+  } finally {
+    authLoading.value = false
+  }
+}
+
+async function handleLogout(): Promise<void> {
+  await logout()
+  currentUser.value = null
+  page.value = 'auth'
+  authMode.value = 'login'
+  authEmail.value = ''
+  authPassword.value = ''
+  authName.value = ''
+  authError.value = ''
+}
+
 function selectMethod(method: TimerMethod): void {
   selectedMethod.value = method
   const preset = methods.find((item) => item.id === method)
   if (preset && method !== 'CUSTOM') customMinutes.value = preset.study
 }
-function openNew(method: TimerMethod = 'CUSTOM'): void { selectMethod(method); topic.value = ''; error.value = ''; page.value = 'new' }
+function setPage(next: AppPage): void {
+  if (next === page.value) return
+  page.value = next
+  notice.value = ''
+  if (next === 'timer' && activeSession.value) startTicker()
+}
+function openNew(method: TimerMethod = 'CUSTOM'): void { selectMethod(method); topic.value = ''; error.value = ''; setPage('new') }
 function newSession(): StudySession {
   const preset = currentMethod.value
   const minutes = selectedMethod.value === 'CUSTOM' ? customMinutes.value : preset.study
@@ -105,7 +157,7 @@ async function createSession(): Promise<void> {
   if (!topic.value.trim()) { error.value = 'O tema é obrigatório.'; return }
   if (customMinutes.value <= 0) { error.value = 'A duração deve ser maior que zero.'; return }
   if (activeSession.value) { error.value = 'Você já possui uma sessão em andamento.'; return }
-  const session = newSession(); sessions.value.push(session); activeSession.value = session; await persist(session); page.value = 'timer'; startTicker()
+  const session = newSession(); sessions.value.push(session); activeSession.value = session; await persist(session); setPage('timer'); startTicker()
 }
 function startTicker(): void { if (ticker === undefined) ticker = window.setInterval(() => { now.value = Date.now(); refreshTimer() }, 1000) }
 function stopTicker(): void { if (ticker !== undefined) { window.clearInterval(ticker); ticker = undefined } }
@@ -124,24 +176,32 @@ async function resumeSession(): Promise<void> {
 async function finishSession(withConfirm = true): Promise<void> {
   if (!activeSession.value) return
   if (withConfirm && !window.confirm('Finalizar sessão? Seu tempo estudado será registrado.')) return
-  const session = activeSession.value; session.status = 'COMPLETED'; session.finishedAt = new Date().toISOString(); session.actualDuration = Math.round(studiedSecondsAt(session, Date.now())); await persist(session); activeSession.value = null; stopTicker(); notice.value = 'Sessão concluída. Seu tempo foi registrado.'; page.value = 'dashboard'
+  const session = activeSession.value; session.status = 'COMPLETED'; session.finishedAt = new Date().toISOString(); session.actualDuration = Math.round(studiedSecondsAt(session, Date.now())); await persist(session); activeSession.value = null; stopTicker(); notice.value = 'Sessão concluída. Seu tempo foi registrado.'; setPage('dashboard')
   if (settings.value.notifications && 'Notification' in window && Notification.permission === 'granted') new Notification('Daiyo', { body: `Sua sessão de ${session.topic} terminou.` })
 }
-async function cancelSession(): Promise<void> { if (!activeSession.value || !window.confirm('Cancelar esta sessão? Ela não será contabilizada.')) return; activeSession.value.status = 'CANCELED'; activeSession.value.finishedAt = new Date().toISOString(); await persist(activeSession.value); activeSession.value = null; stopTicker(); page.value = 'dashboard' }
+async function cancelSession(): Promise<void> { if (!activeSession.value || !window.confirm('Cancelar esta sessão? Ela não será contabilizada.')) return; activeSession.value.status = 'CANCELED'; activeSession.value.finishedAt = new Date().toISOString(); await persist(activeSession.value); activeSession.value = null; stopTicker(); setPage('dashboard') }
 async function requestNotifications(): Promise<void> { if ('Notification' in window) { const permission = await Notification.requestPermission(); settings.value.notifications = permission === 'granted'; saveSettings(settings.value) } }
 function savePreferences(): void { saveSettings(settings.value); notice.value = 'Preferências salvas.' }
-function setPage(next: typeof page.value): void { page.value = next; notice.value = ''; if (next === 'timer' && activeSession.value) startTicker() }
 function statusLabel(status: SessionStatus): string { return ({ COMPLETED: 'Concluída', CANCELED: 'Cancelada', RUNNING: 'Em foco', PAUSED: 'Pausada', BREAK: 'Pausa', CREATED: 'Criada' })[status] }
 function dateLabel(value: string): string { return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) }
 
-onMounted(async () => { await load(); if (activeSession.value) startTicker() })
+onMounted(async () => {
+  const authenticated = isAuthenticated()
+  if (authenticated) {
+    currentUser.value = getCurrentUser()
+    page.value = 'dashboard'
+  }
+
+  await load()
+  if (activeSession.value) startTicker()
+})
 onBeforeUnmount(stopTicker)
 </script>
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">D</span><span>Daiyo</span></div>
+    <aside v-if="page !== 'auth'" class="sidebar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Daiyo</span></div>
       <p class="eyebrow">SEU ESPAÇO DE FOCO</p>
       <nav>
         <button :class="{ active: page === 'dashboard' }" @click="setPage('dashboard')"><span>⌂</span> Visão geral</button>
@@ -149,32 +209,93 @@ onBeforeUnmount(stopTicker)
         <button :class="{ active: page === 'history' }" @click="setPage('history')"><span>◷</span> Histórico</button>
         <button :class="{ active: page === 'settings' }" @click="setPage('settings')"><span>⚙</span> Configurações</button>
       </nav>
-      <div class="sidebar-bottom"><div class="mini-orbit"></div><p>Um dia de cada vez.<br><strong>Um foco de cada vez.</strong></p></div>
+      <div class="sidebar-bottom">
+        <div class="mini-orbit"></div>
+        <p>{{ currentUser?.name ?? 'Usuário' }}<br><strong>Um foco de cada vez.</strong></p>
+        <button class="text-button" @click="handleLogout()">Sair</button>
+      </div>
     </aside>
 
-    <main class="main-content">
-      <header class="topbar"><div><span class="mobile-brand">Daiyo</span><span class="breadcrumb">{{ page === 'dashboard' ? 'Visão geral' : page === 'new' ? 'Nova sessão' : page === 'timer' ? 'Sessão em andamento' : page === 'history' ? 'Histórico' : 'Configurações' }}</span></div><button class="avatar" aria-label="Perfil">K</button></header>
+    <main v-if="page === 'auth'" class="main-content">
+      <AuthPage
+        :mode="authMode"
+        :name="authName"
+        :email="authEmail"
+        :password="authPassword"
+        :loading="authLoading"
+        :error="authError"
+        @update:mode="authMode = $event"
+        @update:name="authName = $event"
+        @update:email="authEmail = $event"
+        @update:password="authPassword = $event"
+        @submit="submitAuth()"
+      />
+    </main>
+
+    <main v-else class="main-content">
+      <header class="topbar">
+        <div class="crumb-wrap">
+          <span class="mobile-brand">Daiyo</span>
+          <span class="breadcrumb">{{ page === 'dashboard' ? 'Visão geral' : page === 'new' ? 'Nova sessão' : page === 'timer' ? 'Sessão em andamento' : page === 'history' ? 'Histórico' : 'Configurações' }}</span>
+        </div>
+      </header>
       <div v-if="notice" class="toast" role="status">{{ notice }} <button @click="notice = ''">×</button></div>
 
-      <section v-if="page === 'dashboard'" class="page-section">
-        <div class="hero-copy"><p class="eyebrow">{{ new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()) }}</p><h1>Boa tarde, Kaio<span>.</span></h1><p>Reserve um espaço para aquilo que importa hoje.</p></div>
-        <div class="dashboard-grid">
-          <article class="focus-card"><div class="focus-card-top"><div><p class="eyebrow light">PRÓXIMO PASSO</p><h2>Comece pelo que<br><em>pede atenção.</em></h2></div><div class="card-sun">◒</div></div><button class="primary-button" @click="openNew('TWO_HOURS')">Criar uma sessão <span>→</span></button></article>
-          <article class="stat-panel"><div class="stat-header"><p class="eyebrow">HOJE</p><span class="stat-icon">◷</span></div><strong>{{ formatMinutes(todayMinutes) }}</strong><span>tempo estudado</span><div class="goal-line"><div><span>Meta diária</span><b>{{ goalPercent }}%</b></div><div class="progress-bar"><i :style="{ width: `${Math.min(100, goalPercent)}%` }"></i></div></div></article>
-          <article class="stat-panel"><div class="stat-header"><p class="eyebrow">SESSÕES</p><span class="stat-icon">✦</span></div><strong>{{ completedSessions.length }}</strong><span>concluídas no total</span><div class="stat-foot">Consistência nasce do retorno.</div></article>
-        </div>
-        <div class="section-heading"><div><p class="eyebrow">ESCOLHA SEU RITMO</p><h2>Métodos rápidos</h2></div><button class="text-button" @click="openNew()">Ver todos <span>→</span></button></div>
-        <div class="method-grid"><button v-for="method in methods.slice(1)" :key="method.id" class="method-card" @click="openNew(method.id)"><span class="method-number">0{{ methods.indexOf(method) }}</span><strong>{{ method.label }}</strong><small>{{ method.detail }}</small><span class="method-arrow">↗</span></button></div>
-      </section>
+      <DashboardPage
+        v-if="page === 'dashboard'"
+        :goal-percent="goalPercent"
+        :today-minutes="todayMinutes"
+        :completed-sessions="completedSessions.length"
+        :methods="methods"
+        @open-new="openNew($event as TimerMethod | undefined)"
+      />
 
-      <section v-else-if="page === 'new'" class="page-section narrow-section"><div class="hero-copy"><p class="eyebrow">NOVA SESSÃO</p><h1>O que vai ocupar<br><em>sua atenção?</em></h1><p>Defina um pequeno compromisso. O resto fica mais simples.</p></div><div class="form-panel"><label for="topic">Tema da sessão</label><input id="topic" v-model="topic" placeholder="Ex.: Inteligência Artificial" @keyup.enter="createSession"><p class="field-hint">Dê um nome que faça sentido quando você olhar para trás.</p><label>Método</label><div class="method-options"><button v-for="method in methods" :key="method.id" :class="{ selected: selectedMethod === method.id }" @click="selectMethod(method.id)"><span>{{ method.label }}</span><small>{{ method.detail }}</small><b v-if="selectedMethod === method.id">✓</b></button></div><div v-if="selectedMethod === 'CUSTOM'" class="duration-field"><label for="minutes">Duração em minutos</label><input id="minutes" v-model.number="customMinutes" type="number" min="1" max="1440"><span>min</span></div><p v-if="error" class="error-message" role="alert">{{ error }}</p><button class="primary-button wide" @click="createSession">Começar agora <span>→</span></button></div></section>
+      <NewSessionPage
+        v-else-if="page === 'new'"
+        :topic="topic"
+        :selected-method="selectedMethod"
+        :custom-minutes="customMinutes"
+        :error="error"
+        :methods="methods"
+        @update:topic="topic = $event"
+        @select-method="selectMethod($event as TimerMethod)"
+        @update:custom-minutes="customMinutes = Number($event)"
+        @create-session="createSession()"
+      />
 
-      <section v-else-if="page === 'timer' && activeSession" class="timer-section"><div class="timer-head"><div><p class="eyebrow">{{ activeSession.methodLabel }}</p><h1>{{ activeSession.topic }}</h1></div><span class="live-badge"><i></i>{{ activeStatus === 'PAUSED' ? 'PAUSADA' : phaseLabel }}</span></div><div class="timer-stage"><div class="ring" :style="{ '--progress': `${progress * 360}deg` }"><div><span>{{ formatTime(displaySeconds) }}</span><small>tempo restante</small></div></div><p class="timer-caption">{{ activeStatus === 'PAUSED' ? 'O tempo está pausado.' : 'Seu foco está acontecendo agora.' }}</p></div><div class="timer-meta"><div><span>Tempo em foco</span><strong>{{ formatTime(elapsedSeconds) }}</strong></div><div><span>Progresso</span><strong>{{ Math.round(progress * 100) }}%</strong></div><div><span>Meta da sessão</span><strong>{{ formatMinutes(Math.round(activeSession.plannedDuration / 60)) }}</strong></div></div><div class="timer-actions"><button class="primary-button" @click="activeStatus === 'PAUSED' ? resumeSession() : pauseSession()">{{ activeStatus === 'PAUSED' ? 'Continuar' : 'Pausar' }} <span>{{ activeStatus === 'PAUSED' ? '→' : 'Ⅱ' }}</span></button><button class="secondary-button" @click="finishSession()">Finalizar</button><button class="cancel-button" @click="cancelSession">Cancelar sessão</button></div></section>
+      <TimerPage
+        v-else-if="page === 'timer' && activeSession"
+        :active-session="activeSession"
+        :active-status="activeStatus"
+        :phase-label="phaseLabel"
+        :progress="progress"
+        :display-seconds="displaySeconds"
+        :elapsed-seconds="elapsedSeconds"
+        :format-time="formatTime"
+        :format-minutes="formatMinutes"
+        @pause-or-resume="activeStatus === 'PAUSED' ? resumeSession() : pauseSession()"
+        @finish-session="finishSession()"
+        @cancel-session="cancelSession()"
+      />
 
-      <section v-else-if="page === 'history'" class="page-section"><div class="hero-copy"><p class="eyebrow">REGISTRO DE PRESENÇA</p><h1>Seu caminho<br><em>até aqui.</em></h1></div><div class="history-list"><div v-if="!sessions.length" class="empty-state">Nenhuma sessão registrada ainda. Seu primeiro bloco começa quando você decidir.</div><article v-for="session in [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))" :key="session.id" class="history-row"><div class="history-dot" :class="session.status"></div><div class="history-main"><strong>{{ session.topic }}</strong><span>{{ session.methodLabel }} · {{ dateLabel(session.createdAt) }}</span></div><b>{{ formatMinutes(Math.round((session.actualDuration || session.plannedDuration) / 60)) }}</b><span class="status-pill" :class="session.status">{{ statusLabel(session.status) }}</span></article></div></section>
+      <HistoryPage
+        v-else-if="page === 'history'"
+        :sessions="sessions"
+        :format-minutes="formatMinutes"
+        :date-label="dateLabel"
+        :status-label="statusLabel"
+      />
 
-      <section v-else class="page-section narrow-section"><div class="hero-copy"><p class="eyebrow">PREFERÊNCIAS</p><h1>Faça o espaço<br><em>caber em você.</em></h1></div><div class="settings-list"><div class="setting-row"><div><strong>Meta diária</strong><span>Quanto tempo você quer reservar por dia?</span></div><div class="setting-control"><input v-model.number="settings.dailyGoal" type="number" min="1"><span>min</span></div></div><div class="setting-row"><div><strong>Notificações</strong><span>Receba um aviso quando a sessão terminar.</span></div><button class="toggle" :class="{ on: settings.notifications }" @click="settings.notifications = !settings.notifications; savePreferences()"><i></i></button></div><div class="setting-row"><div><strong>Permissão do navegador</strong><span>{{ notificationsSupported ? 'Ative para receber avisos fora da aba.' : 'Seu navegador não suporta notificações.' }}</span></div><button class="secondary-button small" @click="requestNotifications">Permitir</button></div><button class="primary-button wide" @click="savePreferences">Salvar preferências <span>✓</span></button></div></section>
+      <SettingsPage
+        v-else
+        :settings="settings"
+        :notifications-supported="notificationsSupported"
+        @update:daily-goal="settings.dailyGoal = Number($event)"
+        @toggle-notifications="settings.notifications = !settings.notifications; savePreferences()"
+        @save-preferences="savePreferences()"
+        @request-notifications="requestNotifications()"
+      />
     </main>
-    <nav class="mobile-nav"><button :class="{ active: page === 'dashboard' }" @click="setPage('dashboard')">⌂<small>Início</small></button><button :class="{ active: page === 'new' }" @click="openNew()">＋<small>Nova</small></button><button :class="{ active: page === 'history' }" @click="setPage('history')">◷<small>Histórico</small></button><button :class="{ active: page === 'settings' }" @click="setPage('settings')">⚙<small>Ajustes</small></button></nav>
+    <nav v-if="page !== 'auth'" class="mobile-nav"><button :class="{ active: page === 'dashboard' }" @click="setPage('dashboard')">⌂<small>Início</small></button><button :class="{ active: page === 'new' }" @click="openNew()">＋<small>Nova</small></button><button :class="{ active: page === 'history' }" @click="setPage('history')">◷<small>Histórico</small></button><button :class="{ active: page === 'settings' }" @click="setPage('settings')">⚙<small>Ajustes</small></button></nav>
   </div>
 </template>
