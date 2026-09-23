@@ -21,7 +21,7 @@ const authError = ref('')
 const authLoading = ref(false)
 const currentUser = ref<User | null>(getCurrentUser())
 const sessions = ref<StudySession[]>([])
-const settings = ref<AppSettings>(getSettings())
+const settings = ref<AppSettings>({ dailyGoal: 120, notifications: true, sounds: true })
 const activeSession = ref<StudySession | null>(null)
 const now = ref(Date.now())
 const topic = ref('')
@@ -98,6 +98,7 @@ function studiedSecondsAt(session: StudySession, timestamp: number): number {
 }
 async function persist(session: StudySession): Promise<void> { session.updatedAt = new Date().toISOString(); await saveSession(session) }
 async function load(): Promise<void> {
+  settings.value = await getSettings()
   sessions.value = await getSessions()
   activeSession.value = sessions.value.find((session) => ['RUNNING', 'PAUSED', 'BREAK'].includes(session.status)) ?? null
   if (activeSession.value) {
@@ -180,8 +181,17 @@ async function finishSession(withConfirm = true): Promise<void> {
   if (settings.value.notifications && 'Notification' in window && Notification.permission === 'granted') new Notification('Daiyo', { body: `Sua sessão de ${session.topic} terminou.` })
 }
 async function cancelSession(): Promise<void> { if (!activeSession.value || !window.confirm('Cancelar esta sessão? Ela não será contabilizada.')) return; activeSession.value.status = 'CANCELED'; activeSession.value.finishedAt = new Date().toISOString(); await persist(activeSession.value); activeSession.value = null; stopTicker(); setPage('dashboard') }
-async function requestNotifications(): Promise<void> { if ('Notification' in window) { const permission = await Notification.requestPermission(); settings.value.notifications = permission === 'granted'; saveSettings(settings.value) } }
-function savePreferences(): void { saveSettings(settings.value); notice.value = 'Preferências salvas.' }
+async function requestNotifications(): Promise<void> {
+  if ('Notification' in window) {
+    const permission = await Notification.requestPermission()
+    settings.value.notifications = permission === 'granted'
+    await saveSettings(settings.value)
+  }
+}
+async function savePreferences(): Promise<void> {
+  await saveSettings(settings.value)
+  notice.value = 'Preferências salvas.'
+}
 function statusLabel(status: SessionStatus): string { return ({ COMPLETED: 'Concluída', CANCELED: 'Cancelada', RUNNING: 'Em foco', PAUSED: 'Pausada', BREAK: 'Pausa', CREATED: 'Criada' })[status] }
 function dateLabel(value: string): string { return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) }
 
